@@ -1,69 +1,93 @@
-# Feature Tree Utilities
+# Feature Trees
 
-This directory collects experimental tooling for constructing and comparing
-feature trees derived from RDKit molecules.  The utilities operate on the
-Boost-based feature-tree graph produced by `FeatTrees::molToBaseTree()` and
-provide both command-line and Python access to fragment-level descriptors and
-similarity scoring.
+Modern feature-tree construction and similarity evaluation tools for RDKit. The
+implementation builds deterministic graph abstractions that capture ring
+systems, connector motifs, terminal branches, and optional pharmacophoric
+feature groups.  Each node stores sorted atom indices alongside derived summary
+statistics which can be fed into downstream scoring algorithms.
 
 ## Contents
 
-- `FeatTree.h` / `FeatTree.cpp`: definitions of the base feature-tree graph and
-  helpers that cluster fused rings and connector atoms.
-- `FeatTreeUtils.h` / `FeatTreeUtils.cpp`: helper routines used while building
-  the base tree.
-- `FeatTreeSimilarity.h` / `FeatTreeSimilarity.cpp`: fragment profiling and
-  similarity calculation utilities shared by the command-line program and the
-  Python bindings.
-- `ftrees_full.cpp`: a standalone command-line tool that evaluates pairwise
-  feature-tree similarities for SMILES inputs.
-- `testFeatTrees.cpp`: legacy exploratory tests for the feature-tree
-  construction logic.
+- `FeatTree.h` / `FeatTree.cpp`: public API and implementation of the base-tree
+  builder, the feature-tree transformer, canonicalisation and JSON utilities,
+  together with the weighted Jaccard similarity calculation.
+- `FeatTreeUtils.h` / `FeatTreeUtils.cpp`: factored helper routines used during
+  the base-tree construction pass.  These remain available for unit testing even
+  though `molToBaseTree()` now performs most steps internally.
+- `FeatTreeSimilarity.h` / `FeatTreeSimilarity.cpp`: tree edit-distance
+  approximation helpers that piggy-back on the similarity scores.
+- `FeatTrees/Wrap/rdFeatTrees.cpp`: Python bindings exposing the new
+  functionality as `rdkit.Chem.rdFeatTrees`.
+- `testFeatTreeConstruction.cpp`, `testFeatTreeSimilarity.cpp`: unit tests that
+  validate construction invariants, determinism, feature annotations, and the
+  similarity interface.
+- `ftrees_full.cpp`: legacy command-line driver retained for manual regression
+  checks.
 
-## Command-line usage
+## Quick start
 
-The `ftrees_full` executable expects two or more SMILES strings.  Each SMILES
-is parsed, sanitized, converted into a feature tree, and compared to every other
-input molecule using the fragment-level similarity heuristic.
+```cpp
+#include <GraphMol/Basement/FeatTrees/FeatTree.h>
+#include <GraphMol/SmilesParse/SmilesParse.h>
 
-```bash
-ftrees_full "c1ccccc1O" "CCN(CC)CC"
+using namespace RDKit;
+using namespace RDKit::FeatTrees;
+
+ROMol mol(*SmilesToMol("c1ccc(CO)cc1"));
+FeatTreeParams params;
+params.annotateFeatures = true;
+auto tree = molToFeatTree(mol, params);
+std::cout << featTreeToJSON(*tree) << std::endl;
 ```
 
-Each pair of molecules is reported with a similarity score in the range `[0, 1]`.
-
-## Python bindings
-
-The `rdftrees` Python extension exposes the same profiling and scoring logic.
-It can be imported from `rdkit.Chem` once RDKit is built with Python bindings:
+Python bindings expose a similar workflow:
 
 ```python
 from rdkit import Chem
-from rdkit.Chem import rdftrees
+from rdkit.Chem import rdFeatTrees
 
-mol1 = Chem.MolFromSmiles("c1ccccc1O")
-mol2 = Chem.MolFromSmiles("CCN(CC)CC")
-
-profiles = rdftrees.build_fragment_profiles(mol1)
-score = rdftrees.compare_molecules(mol1, mol2)
+mol = Chem.MolFromSmiles("c1ccc(O)cc1")
+params = rdFeatTrees.FeatTreeParams(annotateFeatures=True)
+tree = rdFeatTrees.MolToFeatTree(mol, params)
+print(tree.ToJSON())
 ```
 
-- `build_fragment_profiles(mol, sanitize=True)` returns a list of dictionaries,
-  one per fragment, summarizing the coarse physicochemical properties of the
-  fragment.
-- `compare_molecules(mol1, mol2, sanitize=True)` computes a symmetric
-  similarity score by matching the best fragment pairings between both
-  molecules.
+## Determinism and testing
 
-All functions sanitize a working copy of the provided molecules by default.
-Disable sanitization only if the molecules were already processed.
+Both the C++ and Python builders canonicalise node ordering before returning a
+feature tree.  The regression tests in this directory construct multiple
+reference trees, exercise parameter toggles (path compression, branch grouping,
+feature annotation), and ensure that serialised JSON descriptions remain stable
+across repeated runs.  Similarity tests guard the weighted Jaccard scores and
+edit-distance approximation helpers.
 
-## Implementation notes
+## Similarity scoring
 
-The fragment descriptors capture the number of heavy atoms (volume), ring and
-aromatic membership flags, counts of hydrogen-bond donors and acceptors, a
-simple amide-like pattern, and the fraction of carbon atoms as a proxy for
-hydrophobicity.  Similarities are computed by comparing these descriptors with a
-set of heuristic component scores and averaging the best-matching fragment
-pairs between the molecules.
+`calcFeatTreeSimilarity()` implements a weighted Jaccard index over node
+signatures.  Each signature summarises the node kind, atom counts, aromatic and
+hetero-atom statistics, and selected flags (donor/acceptor).  The same scoring
+machinery feeds the edit-distance approximation in `FeatTreeSimilarity.cpp`.
 
+## Feature annotations
+
+When `FeatTreeParams::annotateFeatures` is enabled the transformer attempts to
+load the default RDKit feature definition file (`BaseFeatures.fdef`).  If the
+file is unavailable the code falls back to a small heuristic detector that tags
+hetero atoms.  Feature-group nodes coexist with structural nodes and are marked
+with the `FeatTreeNodeKind::FeatureGroup` kind for easy filtering.
+
+## Python module
+
+The `rdkit.Chem.rdFeatTrees` module exposes:
+
+- `FeatTreeParams`: keyword-configurable parameter object with a helpful `repr`.
+- `MolToFeatTree(mol, params=None, as_base_tree=False)`: builds either the base
+  tree or the fully transformed tree.
+- `BaseTreeToFeatTree(base_tree, params=None, mol)`: applies the transformation
+  stages to an existing base tree instance.
+- `CalcFeatTreeSimilarity(...)`: overloaded for molecule or `FeatTree` inputs.
+- `FeatTree` class: `.GetNodes()`, `.GetEdges()`, `.ToJSON()`, and a concise
+  `repr` string.
+
+All Python node dictionaries mirror the C++ `FeatTreeNodeData` structure so that
+flags and summary statistics stay accessible from scripts.

@@ -13,6 +13,7 @@ The RDKit Documentation
   Install
   GettingStartedInPython
   RDKit_Book
+  FeatureTrees
   GettingStartedWithContributing
   Cookbook
   Cartridge
