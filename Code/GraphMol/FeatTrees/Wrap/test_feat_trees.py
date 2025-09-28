@@ -1,4 +1,5 @@
 from rdkit import Chem
+from rdkit import Chem
 from rdkit.Chem import rdFeatTrees
 import json
 

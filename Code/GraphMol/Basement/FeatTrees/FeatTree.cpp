@@ -31,14 +31,107 @@
 #include <tuple>
 #include <unordered_map>
 
+#include <boost/functional/hash.hpp>
+
+#ifdef FEATTREE_PROFILE
+#include <chrono>
+#endif
+
 #include "FeatTreeUtils.h"
 
 namespace RDKit {
 namespace FeatTrees {
+
+/*!
+ * \brief Optional profiling helpers.
+ *
+ * Enable FEATTREE_PROFILE to collect coarse timing information for the
+ * primary phases of feature-tree construction, canonicalisation and
+ * similarity scoring.  The timings are emitted via RDKit debug logging and
+ * are intended for local benchmarking only.
+ */
+#ifdef FEATTREE_PROFILE
+namespace {
+struct ProfileScope {
+  ProfileScope(const char *label)
+      : d_label(label), d_start(std::chrono::high_resolution_clock::now()) {}
+  ~ProfileScope() {
+    const auto end = std::chrono::high_resolution_clock::now();
+    const auto duration =
+        std::chrono::duration_cast<std::chrono::microseconds>(end - d_start)
+            .count();
+    BOOST_LOG(rdDebug) << "[FeatTreeProfile] " << d_label << ": " << duration
+                       << " us";
+  }
+  const char *d_label;
+  std::chrono::high_resolution_clock::time_point d_start;
+};
+}  // namespace
+#define FEATTREE_PROFILE_SCOPE(label) ProfileScope profileScope__(label)
+#else
+#define FEATTREE_PROFILE_SCOPE(label) ((void)0)
+#endif
+
 namespace {
 
 using Vertex = boost::graph_traits<FeatTreeGraph>::vertex_descriptor;
 using Edge = boost::graph_traits<FeatTreeGraph>::edge_descriptor;
+
+bool isStructuralNode(const FeatTreeNodeData &node) {
+  return node.kind != FeatTreeNodeKind::ZeroNode &&
+         node.kind != FeatTreeNodeKind::FeatureGroup;
+}
+
+bool atomsAreSortedUnique(const std::vector<unsigned int> &atoms) {
+  return std::is_sorted(atoms.begin(), atoms.end()) &&
+         std::adjacent_find(atoms.begin(), atoms.end()) == atoms.end();
+}
+
+bool graphsEquivalent(const FeatTreeGraph &lhs, const FeatTreeGraph &rhs) {
+  if (boost::num_vertices(lhs) != boost::num_vertices(rhs) ||
+      boost::num_edges(lhs) != boost::num_edges(rhs)) {
+    return false;
+  }
+  const auto leftNodes = boost::get(FeatTreeNode_t(), lhs);
+  const auto rightNodes = boost::get(FeatTreeNode_t(), rhs);
+  for (auto vp = boost::vertices(lhs); vp.first != vp.second; ++vp.first) {
+    const auto &ln = leftNodes[*vp.first];
+    const auto &rn = rightNodes[*vp.first];
+    if (ln.kind != rn.kind || ln.flags != rn.flags ||
+        ln.aromaticAtomCount != rn.aromaticAtomCount ||
+        ln.heteroAtomCount != rn.heteroAtomCount ||
+        ln.minRingSize != rn.minRingSize || ln.maxRingSize != rn.maxRingSize ||
+        ln.atoms != rn.atoms) {
+      return false;
+    }
+  }
+  using EdgeKey = std::tuple<unsigned int, unsigned int, unsigned char,
+                             unsigned char>;
+  std::multiset<EdgeKey> leftEdges;
+  const auto leftEdgeMap = boost::get(FeatTreeEdge_t(), lhs);
+  for (auto ep = boost::edges(lhs); ep.first != ep.second; ++ep.first) {
+    const auto src = boost::source(*ep.first, lhs);
+    const auto dst = boost::target(*ep.first, lhs);
+    const auto &edge = leftEdgeMap[*ep.first];
+    leftEdges.emplace(std::minmax(src, dst).first,
+                      std::minmax(src, dst).second, edge.ringEndCount,
+                      edge.flags);
+  }
+  const auto rightEdgeMap = boost::get(FeatTreeEdge_t(), rhs);
+  for (auto ep = boost::edges(rhs); ep.first != ep.second; ++ep.first) {
+    const auto src = boost::source(*ep.first, rhs);
+    const auto dst = boost::target(*ep.first, rhs);
+    const auto &edge = rightEdgeMap[*ep.first];
+    auto it = leftEdges.find(EdgeKey(std::minmax(src, dst).first,
+                                     std::minmax(src, dst).second,
+                                     edge.ringEndCount, edge.flags));
+    if (it == leftEdges.end()) {
+      return false;
+    }
+    leftEdges.erase(it);
+  }
+  return leftEdges.empty();
+}
 
 unsigned int getDegree(const FeatTreeGraph &graph, Vertex v) {
   return static_cast<unsigned int>(boost::degree(v, graph));
@@ -130,22 +223,6 @@ std::vector<unsigned int> atomToVertex(const FeatTreeGraph &graph,
 
 bool isConnector(const FeatTreeNodeData &node) {
   return node.kind == FeatTreeNodeKind::Connector;
-}
-
-void ensureInvariant(const FeatTreeGraph &graph) {
-  const auto nodeMap = boost::get(FeatTreeNode_t(), graph);
-  std::set<unsigned int> seenAtoms;
-  for (auto vp = boost::vertices(graph); vp.first != vp.second; ++vp.first) {
-    const auto &node = nodeMap[*vp.first];
-    if (!isZeroNode(node)) {
-      PRECONDITION(!node.atoms.empty(), "node with empty atom list");
-    }
-    for (auto idx : node.atoms) {
-      PRECONDITION(seenAtoms.insert(idx).second ||
-                       node.kind == FeatTreeNodeKind::FeatureGroup,
-                   "atoms assigned to multiple structural nodes");
-    }
-  }
 }
 
 struct ChainResult {
@@ -423,6 +500,8 @@ std::map<NodeSignature, double> signatureWeights(const FeatTreeGraph &graph,
 }  // namespace
 
 FeatTreeGraphSPtr molToBaseTree(const ROMol &mol, const FeatTreeParams &params) {
+  validateParams(params);
+  FEATTREE_PROFILE_SCOPE("FeatTree::MolToBaseTree");
   auto result = FeatTreeGraphSPtr(new FeatTreeGraph());
   addRingsAndConnectors(mol, *result, params);
   addRingRingBonds(mol, *result);
@@ -432,18 +511,21 @@ FeatTreeGraphSPtr molToBaseTree(const ROMol &mol, const FeatTreeParams &params) 
   if (params.canonicalize) {
     canonicalizeFeatTree(*result);
   }
+  validateFeatTree(*result, params, true);
   return result;
 }
 
 void baseTreeToFeatTree(FeatTreeGraph &baseTree, const FeatTreeParams &params,
                         const ROMol *mol) {
+  validateParams(params);
+  FEATTREE_PROFILE_SCOPE("FeatTree::BaseToFeatTree");
   compressPaths(baseTree, params);
   mergeBranchGroups(baseTree, params);
   annotateFeatureGroups(baseTree, mol, params);
   if (params.canonicalize) {
     canonicalizeFeatTree(baseTree);
   }
-  ensureInvariant(baseTree);
+  validateFeatTree(baseTree, params, true);
 }
 
 FeatTreeGraphSPtr molToFeatTree(const ROMol &mol, const FeatTreeParams &params) {
@@ -453,6 +535,7 @@ FeatTreeGraphSPtr molToFeatTree(const ROMol &mol, const FeatTreeParams &params) 
 }
 
 void canonicalizeFeatTree(FeatTreeGraph &graph) {
+  FEATTREE_PROFILE_SCOPE("FeatTree::Canonicalize");
   auto nodeMap = boost::get(FeatTreeNode_t(), graph);
   std::vector<Vertex> vertices;
   for (auto vp = boost::vertices(graph); vp.first != vp.second; ++vp.first) {
@@ -516,9 +599,130 @@ void canonicalizeFeatTree(FeatTreeGraph &graph) {
   graph = std::move(reordered);
 }
 
-std::string featTreeToJSON(const FeatTreeGraph &graph) {
+void validateFeatTree(const FeatTreeGraph &graph, const FeatTreeParams &params,
+                      bool allowZeroNodes) {
+  if (!allowZeroNodes) {
+    PRECONDITION(boost::num_vertices(graph) > 0,
+                 "feature tree has no vertices");
+  }
+  const auto nodeMap = boost::get(FeatTreeNode_t(), graph);
+  std::set<unsigned int> assignedAtoms;
+  bool hasZeroNodes = false;
+  for (auto vp = boost::vertices(graph); vp.first != vp.second; ++vp.first) {
+    const auto &node = nodeMap[*vp.first];
+    PRECONDITION(atomsAreSortedUnique(node.atoms),
+                 "node atoms must be sorted and unique");
+    if (node.kind == FeatTreeNodeKind::ZeroNode) {
+      hasZeroNodes = true;
+    } else {
+      PRECONDITION(!node.atoms.empty(),
+                   "non-zero feature tree node must have atoms");
+    }
+    if (isStructuralNode(node)) {
+      for (auto idx : node.atoms) {
+        const bool inserted = assignedAtoms.insert(idx).second;
+        PRECONDITION(inserted,
+                     "atom index assigned to multiple structural nodes");
+      }
+    }
+  }
+  if (!params.includeZeroNodes) {
+    PRECONDITION(!hasZeroNodes, "zero nodes present but not requested");
+  }
+  const auto edgeMap = boost::get(FeatTreeEdge_t(), graph);
+  std::set<std::pair<unsigned int, unsigned int>> seenEdges;
+  for (auto ep = boost::edges(graph); ep.first != ep.second; ++ep.first) {
+    const auto src = boost::source(*ep.first, graph);
+    const auto dst = boost::target(*ep.first, graph);
+    PRECONDITION(src != dst, "self edges are not permitted");
+    auto key = std::minmax(src, dst);
+    const auto &edge = edgeMap[*ep.first];
+    PRECONDITION(edge.ringEndCount <= 2,
+                 "ring end count must be between 0 and 2");
+    PRECONDITION(seenEdges.insert({key.first, key.second}).second,
+                 "parallel edges detected");
+  }
+  if (params.canonicalize && boost::num_vertices(graph) > 0) {
+    FeatTreeGraph copy(graph);
+    canonicalizeFeatTree(copy);
+    PRECONDITION(graphsEquivalent(copy, graph),
+                 "feature tree is not in canonical order");
+  }
+}
+
+void validateParams(const FeatTreeParams &params) {
+  PRECONDITION(params.ringWeight > 0.0, "ringWeight must be positive");
+  PRECONDITION(params.connectorWeight > 0.0,
+               "connectorWeight must be positive");
+  PRECONDITION(params.featureGroupWeight > 0.0,
+               "featureGroupWeight must be positive");
+  PRECONDITION(params.maxBranchGroupSize > 0,
+               "maxBranchGroupSize must be positive");
+  PRECONDITION(params.maxBranchGroupSize <= 12,
+               "maxBranchGroupSize too large");
+  PRECONDITION(params.similarityAutoThreshold > 0,
+               "similarityAutoThreshold must be positive");
+}
+
+uint64_t hashFeatTree(const FeatTreeGraph &graph) {
+  FeatTreeGraph copy(graph);
+  canonicalizeFeatTree(copy);
+  const auto nodeMap = boost::get(FeatTreeNode_t(), copy);
+  std::size_t seed = static_cast<std::size_t>(1469598103934665603ULL);
+  auto combine = [&seed](std::size_t value) { boost::hash_combine(seed, value); };
+  for (unsigned int idx = 0; idx < boost::num_vertices(copy); ++idx) {
+    const auto &node = nodeMap[idx];
+    combine(static_cast<std::size_t>(node.kind));
+    combine(static_cast<std::size_t>(node.flags));
+    combine(static_cast<std::size_t>(node.aromaticAtomCount));
+    combine(static_cast<std::size_t>(node.heteroAtomCount));
+    combine(static_cast<std::size_t>(node.minRingSize));
+    combine(static_cast<std::size_t>(node.maxRingSize));
+    combine(static_cast<std::size_t>(node.atoms.size()));
+    for (auto atom : node.atoms) {
+      combine(static_cast<std::size_t>(atom));
+    }
+  }
+  std::vector<std::tuple<unsigned int, unsigned int, unsigned char,
+                         unsigned char>> edgeKeys;
+  const auto edgeMap = boost::get(FeatTreeEdge_t(), copy);
+  edgeKeys.reserve(boost::num_edges(copy));
+  for (auto ep = boost::edges(copy); ep.first != ep.second; ++ep.first) {
+    const auto src = boost::source(*ep.first, copy);
+    const auto dst = boost::target(*ep.first, copy);
+    auto key = std::minmax(src, dst);
+    const auto &edge = edgeMap[*ep.first];
+    edgeKeys.emplace_back(key.first, key.second, edge.ringEndCount, edge.flags);
+  }
+  std::sort(edgeKeys.begin(), edgeKeys.end());
+  for (const auto &key : edgeKeys) {
+    combine(static_cast<std::size_t>(std::get<0>(key)));
+    combine(static_cast<std::size_t>(std::get<1>(key)));
+    combine(static_cast<std::size_t>(std::get<2>(key)));
+    combine(static_cast<std::size_t>(std::get<3>(key)));
+  }
+  return static_cast<uint64_t>(seed);
+}
+
+std::string featTreeToJSON(const FeatTreeGraph &graph,
+                           const FeatTreeParams &params) {
   std::ostringstream oss;
-  oss << "{\"nodes\":[";
+  oss << "{\"schema_version\":" << FEATTREE_SCHEMA_VERSION << ",";
+  oss << "\"params\":{";
+  oss << "\"compressPaths\":" << (params.compressPaths ? "true" : "false")
+      << ',';
+  oss << "\"mergeBranchGroups\":"
+      << (params.mergeBranchGroups ? "true" : "false") << ',';
+  oss << "\"includeZeroNodes\":"
+      << (params.includeZeroNodes ? "true" : "false") << ',';
+  oss << "\"canonicalize\":" << (params.canonicalize ? "true" : "false")
+      << ',';
+  oss << "\"maxBranchGroupSize\":" << params.maxBranchGroupSize << ',';
+  oss << "\"similarityAutoThreshold\":" << params.similarityAutoThreshold;
+  oss << ",\"ringWeight\":" << params.ringWeight;
+  oss << ",\"connectorWeight\":" << params.connectorWeight;
+  oss << ",\"featureGroupWeight\":" << params.featureGroupWeight;
+  oss << "},\"nodes\":[";
   const auto nodeMap = boost::get(FeatTreeNode_t(), graph);
   bool first = true;
   unsigned int idx = 0;
@@ -564,10 +768,28 @@ std::string featTreeToJSON(const FeatTreeGraph &graph) {
   return oss.str();
 }
 
-double calcFeatTreeSimilarity(const FeatTreeGraph &g1, const FeatTreeGraph &g2,
-                              const FeatTreeParams &params) {
+FeatTreeGraphSPtr featTreeFromJSON(const std::string &json,
+                                   bool allowExperimental) {
+  if (!allowExperimental) {
+    throw std::runtime_error(
+        "Feature tree JSON import is experimental. Pass allowExperimental=true"
+        " to acknowledge the limitation.");
+  }
+  RDUNUSED_PARAM(json);
+  // TODO(FeatTrees): implement JSON import once the schema stabilises.
+  BOOST_LOG(rdWarningLog)
+      << "featTreeFromJSON is not yet implemented. Returning empty tree.";
+  return FeatTreeGraphSPtr();
+}
+
+static double weightedJaccardSimilarity(const FeatTreeGraph &g1,
+                                        const FeatTreeGraph &g2,
+                                        const FeatTreeParams &params) {
   auto weights1 = signatureWeights(g1, params);
   auto weights2 = signatureWeights(g2, params);
+  if (weights1.empty() && weights2.empty()) {
+    return 1.0;
+  }
   auto it1 = weights1.begin();
   auto it2 = weights2.begin();
   double inter = 0.0;
@@ -593,17 +815,63 @@ double calcFeatTreeSimilarity(const FeatTreeGraph &g1, const FeatTreeGraph &g2,
     uni += it2->second;
   }
   if (uni <= 0.0) {
-    return 0.0;
+    return (weights1.empty() && weights2.empty()) ? 1.0 : 0.0;
   }
   return inter / uni;
 }
 
+double calcFeatTreeSimilarity(const FeatTreeGraph &g1, const FeatTreeGraph &g2,
+                              FeatTreeSimilarityMethod method,
+                              const FeatTreeParams &params) {
+  validateParams(params);
+  FEATTREE_PROFILE_SCOPE("FeatTree::Similarity");
+  validateFeatTree(g1, params, true);
+  validateFeatTree(g2, params, true);
+  auto resolved = method;
+  if (resolved == FeatTreeSimilarityMethod::Auto) {
+    const auto size1 = boost::num_vertices(g1);
+    const auto size2 = boost::num_vertices(g2);
+    if (size1 <= params.similarityAutoThreshold &&
+        size2 <= params.similarityAutoThreshold) {
+      resolved = FeatTreeSimilarityMethod::ApproxEdit;
+    } else {
+      resolved = FeatTreeSimilarityMethod::WeightedJaccard;
+    }
+  }
+  switch (resolved) {
+    case FeatTreeSimilarityMethod::WeightedJaccard:
+      return weightedJaccardSimilarity(g1, g2, params);
+    case FeatTreeSimilarityMethod::ApproxEdit: {
+      const double dist = calcFeatTreeEditDistanceApprox(g1, g2, params);
+      const double avgSize =
+          0.5 * (static_cast<double>(boost::num_vertices(g1)) +
+                 static_cast<double>(boost::num_vertices(g2)));
+      if (avgSize <= std::numeric_limits<double>::epsilon()) {
+        return 1.0;
+      }
+      const double score = 1.0 - dist / avgSize;
+      return std::max(0.0, std::min(1.0, score));
+    }
+    case FeatTreeSimilarityMethod::Auto:
+      break;
+  }
+  return weightedJaccardSimilarity(g1, g2, params);
+}
+
 double calcFeatTreeSimilarity(const ROMol &mol1, const ROMol &mol2,
+                              FeatTreeSimilarityMethod method,
                               const FeatTreeParams &params) {
   auto tree1 = molToFeatTree(mol1, params);
   auto tree2 = molToFeatTree(mol2, params);
-  return calcFeatTreeSimilarity(*tree1, *tree2, params);
+  return calcFeatTreeSimilarity(*tree1, *tree2, method, params);
 }
+
+// TODO(FeatTrees): incorporate 3D geometry descriptors (centroid distances)
+// into node weighting once coordinate handling stabilises.
+// TODO(FeatTrees): add pharmacophore feature integration leveraging
+// FeatureFactory outputs to extend feature-group annotations.
+// TODO(FeatTrees): design a parallel batch similarity API to evaluate many
+// tree comparisons concurrently for screening workloads.
 
 }  // namespace FeatTrees
 }  // namespace RDKit

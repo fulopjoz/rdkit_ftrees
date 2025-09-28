@@ -24,10 +24,12 @@ rdkit_python_extension(rdqueries
                        LINK_LIBRARIES
                        GraphMol)
 
+if(RDK_BUILD_FEATTREES)
 rdkit_python_extension(rdftrees
                        ../FeatTrees/Wrap/rdFeatTrees.cpp
                        DEST Chem
                        LINK_LIBRARIES GraphMol SmilesParse RDGeneral RDBoost)
+endif()
 
 if(RDK_BUILD_MAEPARSER_SUPPORT)
     set (maesupplier MaeMolSupplier.cpp MaeWriter.cpp)
@@ -78,8 +80,14 @@ add_pytest(pyTestSGroups
 add_pytest(pyTestSCSR
          ${CMAKE_CURRENT_SOURCE_DIR}/testSCSR.py)
 
+if(RDK_BUILD_FEATTREES)
 add_pytest(pyTestFeatTrees
         ${CMAKE_CURRENT_SOURCE_DIR}/../FeatTrees/Wrap/test_feat_trees.py)
+add_pytest(pyTestFeatTreeHash
+        ${CMAKE_CURRENT_SOURCE_DIR}/../FeatTrees/Wrap/test_feat_tree_hash.py)
+add_pytest(pyTestFeatTreeSimilarityMethods
+        ${CMAKE_CURRENT_SOURCE_DIR}/../FeatTrees/Wrap/test_feat_tree_similarity_methods.py)
+endif()
 
 
 if (RDK_TEST_MULTITHREADED)

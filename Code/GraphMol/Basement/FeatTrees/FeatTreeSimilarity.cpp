@@ -24,13 +24,16 @@ double graphSize(const FeatTreeGraph &g) {
 double calcFeatTreeEditDistanceApprox(const FeatTreeGraph &g1,
                                       const FeatTreeGraph &g2,
                                       const FeatTreeParams &params) {
-  const double sim = calcFeatTreeSimilarity(g1, g2, params);
+  validateParams(params);
+  const double sim = calcFeatTreeSimilarity(
+      g1, g2, FeatTreeSimilarityMethod::WeightedJaccard, params);
   const double avgSize = 0.5 * (graphSize(g1) + graphSize(g2));
   return (1.0 - sim) * avgSize;
 }
 
 double calcFeatTreeEditDistanceApprox(const ROMol &mol1, const ROMol &mol2,
                                       const FeatTreeParams &params) {
+  validateParams(params);
   auto tree1 = molToFeatTree(mol1, params);
   auto tree2 = molToFeatTree(mol2, params);
   return calcFeatTreeEditDistanceApprox(*tree1, *tree2, params);

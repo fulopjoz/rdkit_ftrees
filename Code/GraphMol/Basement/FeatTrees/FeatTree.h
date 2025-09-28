@@ -39,7 +39,12 @@ class ROMol;
 
 namespace FeatTrees {
 
-//! \brief kind of a feature tree node.
+//! \brief schema version for feature tree serialisation.
+//! Increment when the JSON encoding gains backwards-incompatible changes.
+constexpr uint32_t FEATTREE_SCHEMA_VERSION = 1;
+
+//! \enum FeatTreeNodeKind
+//! \brief Enumerates the supported structural node categories.
 enum class FeatTreeNodeKind : unsigned char {
   RingSystem = 0,
   FusedRingSystem,
@@ -47,6 +52,14 @@ enum class FeatTreeNodeKind : unsigned char {
   BranchGroup,
   ZeroNode,
   FeatureGroup
+};
+
+//! \enum FeatTreeSimilarityMethod
+//! \brief Selects the similarity scoring algorithm to apply.
+enum class FeatTreeSimilarityMethod : unsigned char {
+  WeightedJaccard = 0,
+  ApproxEdit,
+  Auto
 };
 
 //! \brief bit flags stored on nodes for derived annotations.
@@ -107,6 +120,10 @@ struct FeatTreeEdge_t {
 };
 
 //! \brief adjacency list that represents feature trees.
+//!
+//! Feature-tree graphs returned from the public builders are immutable; callers
+//! should treat them as read-only snapshots.  All transformations return new
+//! graphs to avoid aliasing surprises.
 typedef boost::adjacency_list<
     boost::vecS, boost::vecS, boost::undirectedS,
     boost::property<FeatTreeNode_t, FeatTreeNodeData>,
@@ -130,6 +147,7 @@ struct RDKIT_GRAPHMOL_EXPORT FeatTreeParams {
   double ringWeight = 1.0;
   double connectorWeight = 1.0;
   double featureGroupWeight = 1.2;
+  unsigned int similarityAutoThreshold = 32;
 };
 
 //! helper returning true if the given node is a ring-like node.
@@ -195,18 +213,54 @@ RDKIT_GRAPHMOL_EXPORT FeatTreeGraphSPtr molToFeatTree(
 //! \brief canonicalises vertex numbering to provide deterministic serialisation.
 RDKIT_GRAPHMOL_EXPORT void canonicalizeFeatTree(FeatTreeGraph &graph);
 
+//! \brief validates feature tree structural invariants.
+RDKIT_GRAPHMOL_EXPORT void validateFeatTree(const FeatTreeGraph &graph,
+                                            const FeatTreeParams &params,
+                                            bool allowZeroNodes = false);
+
+//! \brief validates construction parameters.
+RDKIT_GRAPHMOL_EXPORT void validateParams(const FeatTreeParams &params);
+
+//! \brief calculates a stable hash for canonical feature trees.
+RDKIT_GRAPHMOL_EXPORT uint64_t hashFeatTree(const FeatTreeGraph &graph);
+
 //! \brief serialises a feature tree to a JSON string for debugging.
-RDKIT_GRAPHMOL_EXPORT std::string featTreeToJSON(const FeatTreeGraph &graph);
+RDKIT_GRAPHMOL_EXPORT std::string featTreeToJSON(
+    const FeatTreeGraph &graph,
+    const FeatTreeParams &params = FeatTreeParams());
+
+//! \brief deserialises a feature tree from JSON (not yet implemented).
+RDKIT_GRAPHMOL_EXPORT FeatTreeGraphSPtr featTreeFromJSON(
+    const std::string &json, bool allowExperimental = false);
 
 //! \brief Computes similarity between two molecules using feature trees.
 RDKIT_GRAPHMOL_EXPORT double calcFeatTreeSimilarity(
     const ROMol &mol1, const ROMol &mol2,
+    FeatTreeSimilarityMethod method = FeatTreeSimilarityMethod::WeightedJaccard,
     const FeatTreeParams &params = FeatTreeParams());
+
+//! \brief Backwards compatible overload selecting weighted Jaccard.
+inline double calcFeatTreeSimilarity(const ROMol &mol1, const ROMol &mol2,
+                                     const FeatTreeParams &params) {
+  return calcFeatTreeSimilarity(mol1, mol2,
+                                FeatTreeSimilarityMethod::WeightedJaccard,
+                                params);
+}
 
 //! \brief Computes similarity between two feature trees.
 RDKIT_GRAPHMOL_EXPORT double calcFeatTreeSimilarity(
     const FeatTreeGraph &g1, const FeatTreeGraph &g2,
+    FeatTreeSimilarityMethod method =
+        FeatTreeSimilarityMethod::WeightedJaccard,
     const FeatTreeParams &params = FeatTreeParams());
+
+//! \brief Backwards compatible overload selecting weighted Jaccard.
+inline double calcFeatTreeSimilarity(const FeatTreeGraph &g1,
+                                     const FeatTreeGraph &g2,
+                                     const FeatTreeParams &params) {
+  return calcFeatTreeSimilarity(g1, g2, FeatTreeSimilarityMethod::WeightedJaccard,
+                                params);
+}
 
 }  // namespace FeatTrees
 }  // namespace RDKit

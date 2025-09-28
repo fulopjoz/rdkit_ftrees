@@ -14,6 +14,8 @@
 #include <GraphMol/RDKitBase.h>
 #include <GraphMol/Basement/FeatTrees/FeatTree.h>
 
+#include <boost/optional.hpp>
+
 #include <sstream>
 #include <string>
 
@@ -57,6 +59,8 @@ FeatTreeParams paramsFromObject(const python::object &obj) {
         params.connectorWeight = python::extract<double>(value);
       } else if (key == "featureGroupWeight") {
         params.featureGroupWeight = python::extract<double>(value);
+      } else if (key == "similarityAutoThreshold") {
+        params.similarityAutoThreshold = python::extract<unsigned int>(value);
       } else {
         throw_value_error(("Unknown FeatTreeParams field: " + key).c_str());
       }
@@ -68,7 +72,9 @@ FeatTreeParams paramsFromObject(const python::object &obj) {
 }
 
 struct PyFeatTree {
-  explicit PyFeatTree(FeatTreeGraphSPtr tree) : d_tree(std::move(tree)) {}
+  PyFeatTree(FeatTreeGraphSPtr tree,
+             boost::optional<FeatTreeParams> params = boost::none)
+      : d_tree(std::move(tree)), d_params(std::move(params)) {}
   python::list getNodes() const {
     python::list res;
     if (!d_tree) {
@@ -112,11 +118,15 @@ struct PyFeatTree {
     }
     return res;
   }
-  std::string toJSON() const {
+  std::string toJSON(const python::object &paramsObj) const {
     if (!d_tree) {
       return "{}";
     }
-    return featTreeToJSON(*d_tree);
+    FeatTreeParams params = d_params ? *d_params : FeatTreeParams();
+    if (!paramsObj.is_none()) {
+      params = paramsFromObject(paramsObj);
+    }
+    return featTreeToJSON(*d_tree, params);
   }
   std::string repr() const {
     std::ostringstream oss;
@@ -126,30 +136,74 @@ struct PyFeatTree {
   }
 
   FeatTreeGraphSPtr d_tree;
+  boost::optional<FeatTreeParams> d_params;
 };
 
 PyFeatTree molToFeatTreePy(const ROMol &mol, const python::object &paramsObj,
                            bool asBaseTree) {
   const auto params = paramsFromObject(paramsObj);
   if (asBaseTree) {
-    return PyFeatTree(molToBaseTree(mol, params));
+    return PyFeatTree(molToBaseTree(mol, params), params);
   }
-  return PyFeatTree(molToFeatTree(mol, params));
+  return PyFeatTree(molToFeatTree(mol, params), params);
+}
+
+FeatTreeSimilarityMethod methodFromObject(const python::object &obj) {
+  if (!obj || obj.is_none()) {
+    return FeatTreeSimilarityMethod::WeightedJaccard;
+  }
+  python::extract<FeatTreeSimilarityMethod> extractEnum(obj);
+  if (extractEnum.check()) {
+    return extractEnum();
+  }
+  python::extract<unsigned int> extractInt(obj);
+  if (extractInt.check()) {
+    return static_cast<FeatTreeSimilarityMethod>(extractInt());
+  }
+  throw_value_error("Invalid FeatTreeSimilarityMethod");
+  return FeatTreeSimilarityMethod::WeightedJaccard;
+}
+
+bool isParamsLike(const python::object &obj) {
+  if (!obj || obj.is_none()) {
+    return false;
+  }
+  python::extract<FeatTreeParams> extractParams(obj);
+  if (extractParams.check()) {
+    return true;
+  }
+  return PyMapping_Check(obj.ptr());
 }
 
 double calcFeatTreeSimilarityPy(const ROMol &mol1, const ROMol &mol2,
+                                const python::object &methodObj,
                                 const python::object &paramsObj) {
-  const auto params = paramsFromObject(paramsObj);
-  return calcFeatTreeSimilarity(mol1, mol2, params);
+  python::object methodArg = methodObj;
+  python::object paramsArg = paramsObj;
+  if ((paramsObj.is_none() || !paramsObj) && isParamsLike(methodObj)) {
+    paramsArg = methodObj;
+    methodArg = python::object();
+  }
+  const auto method = methodFromObject(methodArg);
+  const auto params = paramsFromObject(paramsArg);
+  return calcFeatTreeSimilarity(mol1, mol2, method, params);
 }
 
 double calcFeatTreeSimilarityGraphPy(const PyFeatTree &tree1,
                                      const PyFeatTree &tree2,
+                                     const python::object &methodObj,
                                      const python::object &paramsObj) {
-  const auto params = paramsFromObject(paramsObj);
+  python::object methodArg = methodObj;
+  python::object paramsArg = paramsObj;
+  if ((paramsObj.is_none() || !paramsObj) && isParamsLike(methodObj)) {
+    paramsArg = methodObj;
+    methodArg = python::object();
+  }
+  const auto params = paramsFromObject(paramsArg);
+  const auto method = methodFromObject(methodArg);
   PRECONDITION(tree1.d_tree, "Invalid tree");
   PRECONDITION(tree2.d_tree, "Invalid tree");
-  return calcFeatTreeSimilarity(*tree1.d_tree, *tree2.d_tree, params);
+  return calcFeatTreeSimilarity(*tree1.d_tree, *tree2.d_tree, method, params);
 }
 
 PyFeatTree baseTreeToFeatTreePy(const PyFeatTree &baseTree,
@@ -159,7 +213,12 @@ PyFeatTree baseTreeToFeatTreePy(const PyFeatTree &baseTree,
   PRECONDITION(baseTree.d_tree, "Invalid base tree");
   auto copy = FeatTreeGraphSPtr(new FeatTreeGraph(*baseTree.d_tree));
   baseTreeToFeatTree(*copy, params, &mol);
-  return PyFeatTree(copy);
+  return PyFeatTree(copy, params);
+}
+
+uint64_t hashFeatTreePy(const PyFeatTree &tree) {
+  PRECONDITION(tree.d_tree, "Invalid tree");
+  return hashFeatTree(*tree.d_tree);
 }
 
 }  // namespace
@@ -173,6 +232,11 @@ void wrapFeatTrees() {
       .value("ZeroNode", FeatTreeNodeKind::ZeroNode)
       .value("FeatureGroup", FeatTreeNodeKind::FeatureGroup);
 
+  python::enum_<FeatTreeSimilarityMethod>("FeatTreeSimilarityMethod")
+      .value("WeightedJaccard", FeatTreeSimilarityMethod::WeightedJaccard)
+      .value("ApproxEdit", FeatTreeSimilarityMethod::ApproxEdit)
+      .value("Auto", FeatTreeSimilarityMethod::Auto);
+
   python::class_<FeatTreeParams>("FeatTreeParams", "Feature tree construction options",
                                  python::init<>())
       .def_readwrite("compressPaths", &FeatTreeParams::compressPaths)
@@ -184,6 +248,8 @@ void wrapFeatTrees() {
       .def_readwrite("ringWeight", &FeatTreeParams::ringWeight)
       .def_readwrite("connectorWeight", &FeatTreeParams::connectorWeight)
       .def_readwrite("featureGroupWeight", &FeatTreeParams::featureGroupWeight)
+      .def_readwrite("similarityAutoThreshold",
+                     &FeatTreeParams::similarityAutoThreshold)
       .def("__repr__", [](const FeatTreeParams &params) {
         std::ostringstream oss;
         oss << "FeatTreeParams(compressPaths=" << params.compressPaths
@@ -194,7 +260,9 @@ void wrapFeatTrees() {
             << ", canonicalize=" << params.canonicalize
             << ", ringWeight=" << params.ringWeight
             << ", connectorWeight=" << params.connectorWeight
-            << ", featureGroupWeight=" << params.featureGroupWeight << ')';
+            << ", featureGroupWeight=" << params.featureGroupWeight
+            << ", similarityAutoThreshold="
+            << params.similarityAutoThreshold << ')';
         return oss.str();
       });
 
@@ -204,7 +272,9 @@ void wrapFeatTrees() {
            "Return a list of node dictionaries.")
       .def("GetEdges", &PyFeatTree::getEdges,
            "Return a list of (u, v, data) edge tuples.")
-      .def("ToJSON", &PyFeatTree::toJSON, "Serialise the tree to JSON.")
+      .def("ToJSON", &PyFeatTree::toJSON,
+           (python::arg("params") = python::object()),
+           "Serialise the tree to JSON.")
       .def("__repr__", &PyFeatTree::repr);
 
   python::def("MolToFeatTree", molToFeatTreePy,
@@ -217,12 +287,18 @@ void wrapFeatTrees() {
               "Applies post-processing stages to a base tree.");
   python::def("CalcFeatTreeSimilarity", calcFeatTreeSimilarityPy,
               (python::arg("mol1"), python::arg("mol2"),
+               python::arg("method") = python::object(),
                python::arg("params") = python::object()),
-              "Calculates the weighted Jaccard similarity between molecules.");
+              "Calculates feature tree similarity between molecules.");
   python::def("CalcFeatTreeSimilarity", calcFeatTreeSimilarityGraphPy,
               (python::arg("tree1"), python::arg("tree2"),
+               python::arg("method") = python::object(),
                python::arg("params") = python::object()),
-              "Calculates the weighted Jaccard similarity between feature trees.");
+              "Calculates feature tree similarity between feature trees.");
+  python::def("HashFeatTree", hashFeatTreePy, (python::arg("tree")),
+              "Return a 64-bit stable hash for the canonical feature tree.");
+
+  python::scope().attr("FEATTREE_SCHEMA_VERSION") = FEATTREE_SCHEMA_VERSION;
 }
 
 }  // namespace FeatTrees
