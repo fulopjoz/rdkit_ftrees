@@ -16,7 +16,7 @@
 #include "FeatTree.h"
 
 #include <boost/graph/biconnected_components.hpp>
-#include <boost/property_map.hpp>
+#include <boost/property_map/property_map.hpp>
 #include <map>
 #include <set>
 

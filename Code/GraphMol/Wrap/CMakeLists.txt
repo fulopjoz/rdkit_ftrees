@@ -24,6 +24,11 @@ rdkit_python_extension(rdqueries
                        LINK_LIBRARIES
                        GraphMol)
 
+rdkit_python_extension(rdftrees
+                       FeatTreeSimilarity.cpp
+                       DEST Chem
+                       LINK_LIBRARIES GraphMol SmilesParse RDGeneral RDBoost)
+
 if(RDK_BUILD_MAEPARSER_SUPPORT)
     set (maesupplier MaeMolSupplier.cpp MaeWriter.cpp)
     include_directories(${maeparser_INCLUDE_DIRS})

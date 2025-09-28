@@ -13,7 +13,7 @@
 #define _RD_FEATTREE_H_
 
 #include <boost/graph/adjacency_list.hpp>
-#include <boost/property_map.hpp>
+#include <boost/property_map/property_map.hpp>
 #include <boost/shared_ptr.hpp>
 #include <set>
 
