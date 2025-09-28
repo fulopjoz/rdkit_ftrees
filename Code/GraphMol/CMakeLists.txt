@@ -9,9 +9,11 @@ rdkit_library(GraphMol
         new_canon.cpp SubstanceGroup.cpp FindStereo.cpp MonomerInfo.cpp
         NontetrahedralStereo.cpp Atropisomers.cpp
         WedgeBonds.cpp MolProps.cpp
+        Basement/FeatTrees/FeatTree.cpp
+        Basement/FeatTrees/FeatTreeUtils.cpp
         Basement/FeatTrees/FeatTreeSimilarity.cpp
         SHARED
-        LINK_LIBRARIES RDGeometryLib RDGeneral)
+        LINK_LIBRARIES RDGeometryLib RDGeneral MolChemicalFeatures)
 target_compile_definitions(GraphMol PRIVATE RDKIT_GRAPHMOL_BUILD)
 if (RDK_USE_URF)
     target_link_libraries(GraphMol PUBLIC ${RDK_URF_LIBS})
@@ -50,6 +52,9 @@ rdkit_headers(Atom.h
         MonomerInfo.h
         new_canon.h
         MolBundle.h
+        Basement/FeatTrees/FeatTree.h
+        Basement/FeatTrees/FeatTreeUtils.h
+        Basement/FeatTrees/FeatTreeSimilarity.h
         DEST GraphMol)
 
 add_subdirectory(SmilesParse)
@@ -152,6 +157,12 @@ rdkit_test(graphmoltestPicklerGlobalSetting testPicklerGlobalSettings.cpp
         LINK_LIBRARIES SmilesParse SubstructMatch FileParsers GraphMol)
 
 rdkit_test(graphmolIterTest itertest.cpp LINK_LIBRARIES SmilesParse GraphMol)
+
+rdkit_test(graphmolFeatTreeConstruction Basement/FeatTrees/testFeatTreeConstruction.cpp
+        LINK_LIBRARIES SmilesParse GraphMol)
+
+rdkit_test(graphmolFeatTreeSimilarity Basement/FeatTrees/testFeatTreeSimilarity.cpp
+        LINK_LIBRARIES SmilesParse GraphMol)
 
 rdkit_test(hanoiTest hanoitest.cpp LINK_LIBRARIES
         SubstructMatch SmilesParse FileParsers GraphMol

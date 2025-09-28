@@ -25,7 +25,7 @@ rdkit_python_extension(rdqueries
                        GraphMol)
 
 rdkit_python_extension(rdftrees
-                       FeatTreeSimilarity.cpp
+                       ../FeatTrees/Wrap/rdFeatTrees.cpp
                        DEST Chem
                        LINK_LIBRARIES GraphMol SmilesParse RDGeneral RDBoost)
 
@@ -77,6 +77,9 @@ add_pytest(pyTestSGroups
 
 add_pytest(pyTestSCSR
          ${CMAKE_CURRENT_SOURCE_DIR}/testSCSR.py)
+
+add_pytest(pyTestFeatTrees
+        ${CMAKE_CURRENT_SOURCE_DIR}/../FeatTrees/Wrap/test_feat_trees.py)
 
 
 if (RDK_TEST_MULTITHREADED)

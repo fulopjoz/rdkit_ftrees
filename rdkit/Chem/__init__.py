@@ -14,11 +14,13 @@
 """
 from rdkit import DataStructs, RDConfig, rdBase
 from rdkit.Chem import rdchem
+from rdkit.Chem import rdFeatTrees
 from rdkit.Geometry import rdGeometry
 
 _HasSubstructMatchStr = rdchem._HasSubstructMatchStr
 from rdkit.Chem.inchi import *
 from rdkit.Chem.rdchem import *
+from rdkit.Chem.rdFeatTrees import *
 from rdkit.Chem.rdCIPLabeler import *
 from rdkit.Chem.rdmolfiles import *
 from rdkit.Chem.rdmolops import *

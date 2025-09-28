@@ -7,46 +7,33 @@
 //  which is included in the file license.txt, found at the root
 //  of the RDKit source tree.
 //
+
+/*! \file FeatTreeSimilarity.h
+
+    \brief Helpers that expose edit-distance approximations for feature trees.
+*/
+
 #ifndef RD_FEATTREE_SIMILARITY_H
 #define RD_FEATTREE_SIMILARITY_H
 
-#include <GraphMol/RDKitBase.h>
-#include <GraphMol/Basement/FeatTrees/FeatTree.h>
+#include <RDGeneral/export.h>
 
-#include <set>
-#include <vector>
+#include "FeatTree.h"
 
 namespace RDKit {
 namespace FeatTrees {
 
-struct FragmentProfile {
-  int volume = 0;
-  bool ring = false;
-  int donors = 0;
-  int acceptors = 0;
-  bool amide = false;
-  bool aromatic = false;
-  double hydrophobicity = 0.0;
-};
+//! \brief Approximates a tree edit distance using feature tree similarity.
+RDKIT_GRAPHMOL_EXPORT double calcFeatTreeEditDistanceApprox(
+    const FeatTreeGraph &g1, const FeatTreeGraph &g2,
+    const FeatTreeParams &params = FeatTreeParams());
 
-FragmentProfile computeFragmentProfile(const ROMol &mol,
-                                       const std::set<unsigned int> &indices);
-
-std::vector<FragmentProfile> buildFragmentProfiles(const ROMol &mol,
-                                                   const FeatTreeGraph &tree);
-
-std::vector<FragmentProfile> buildFragmentProfiles(const ROMol &mol);
-
-double compareFragmentProfiles(const FragmentProfile &lhs,
-                               const FragmentProfile &rhs);
-
-double compareProfileSets(const std::vector<FragmentProfile> &lhs,
-                          const std::vector<FragmentProfile> &rhs);
-
-double compareMolecules(const ROMol &lhs, const ROMol &rhs);
+//! \brief Convenience overload operating directly on molecules.
+RDKIT_GRAPHMOL_EXPORT double calcFeatTreeEditDistanceApprox(
+    const ROMol &mol1, const ROMol &mol2,
+    const FeatTreeParams &params = FeatTreeParams());
 
 }  // namespace FeatTrees
 }  // namespace RDKit
 
 #endif  // RD_FEATTREE_SIMILARITY_H
-
