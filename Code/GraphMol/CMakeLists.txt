@@ -1,11 +1,3 @@
-set(GraphMol_featTree_sources)
-if(RDK_BUILD_FEATTREES)
-  list(APPEND GraphMol_featTree_sources
-       Basement/FeatTrees/FeatTree.cpp
-       Basement/FeatTrees/FeatTreeUtils.cpp
-       Basement/FeatTrees/FeatTreeSimilarity.cpp)
-endif()
-
 rdkit_library(GraphMol
         Atom.cpp QueryAtom.cpp QueryBond.cpp Bond.cpp
         MolOps.cpp FindRings.cpp ROMol.cpp RWMol.cpp PeriodicTable.cpp
@@ -17,9 +9,8 @@ rdkit_library(GraphMol
         new_canon.cpp SubstanceGroup.cpp FindStereo.cpp MonomerInfo.cpp
         NontetrahedralStereo.cpp Atropisomers.cpp
         WedgeBonds.cpp MolProps.cpp
-        ${GraphMol_featTree_sources}
         SHARED
-        LINK_LIBRARIES RDGeometryLib RDGeneral MolChemicalFeatures)
+        LINK_LIBRARIES RDGeometryLib RDGeneral)
 target_compile_definitions(GraphMol PRIVATE RDKIT_GRAPHMOL_BUILD)
 if (RDK_USE_URF)
     target_link_libraries(GraphMol PUBLIC ${RDK_URF_LIBS})
@@ -27,14 +18,6 @@ if (RDK_USE_URF)
         target_link_libraries(GraphMol_static PUBLIC ${RDK_URF_LIBS}_static)
     endif ()
 endif ()
-
-set(GraphMol_featTree_headers)
-if(RDK_BUILD_FEATTREES)
-  list(APPEND GraphMol_featTree_headers
-       Basement/FeatTrees/FeatTree.h
-       Basement/FeatTrees/FeatTreeUtils.h
-       Basement/FeatTrees/FeatTreeSimilarity.h)
-endif()
 
 rdkit_headers(Atom.h
         atomic_data.h
@@ -66,8 +49,11 @@ rdkit_headers(Atom.h
         MonomerInfo.h
         new_canon.h
         MolBundle.h
-        ${GraphMol_featTree_headers}
         DEST GraphMol)
+
+if(RDK_BUILD_FEATTREES)
+  add_subdirectory(Basement/FeatTrees)
+endif()
 
 add_subdirectory(SmilesParse)
 add_subdirectory(Depictor)
@@ -172,19 +158,19 @@ rdkit_test(graphmolIterTest itertest.cpp LINK_LIBRARIES SmilesParse GraphMol)
 
 if(RDK_BUILD_FEATTREES)
 rdkit_test(graphmolFeatTreeConstruction Basement/FeatTrees/testFeatTreeConstruction.cpp
-        LINK_LIBRARIES SmilesParse GraphMol)
+        LINK_LIBRARIES SmilesParse GraphMol FeatTrees)
 
 rdkit_test(graphmolFeatTreeSimilarity Basement/FeatTrees/testFeatTreeSimilarity.cpp
-        LINK_LIBRARIES SmilesParse GraphMol)
+        LINK_LIBRARIES SmilesParse GraphMol FeatTrees)
 
 rdkit_test(graphmolFeatTreeInvariants Basement/FeatTrees/testFeatTreeInvariants.cpp
-        LINK_LIBRARIES SmilesParse GraphMol)
+        LINK_LIBRARIES SmilesParse GraphMol FeatTrees)
 
 rdkit_test(graphmolFeatTreeHash Basement/FeatTrees/testFeatTreeHash.cpp
-        LINK_LIBRARIES SmilesParse GraphMol)
+        LINK_LIBRARIES SmilesParse GraphMol FeatTrees)
 
 rdkit_test(graphmolFeatTreeSimilarityMethods Basement/FeatTrees/testFeatTreeSimilarityMethods.cpp
-        LINK_LIBRARIES SmilesParse GraphMol)
+        LINK_LIBRARIES SmilesParse GraphMol FeatTrees)
 endif()
 
 rdkit_test(hanoiTest hanoitest.cpp LINK_LIBRARIES
