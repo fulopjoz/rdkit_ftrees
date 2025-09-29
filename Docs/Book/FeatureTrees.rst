@@ -45,7 +45,8 @@ C++ usage::
     params.annotateFeatures = true;
     params.maxBranchGroupSize = 2;
     auto tree = molToFeatTree(mol, params);
-    std::cout << featTreeToJSON(*tree) << std::endl;
+    validateFeatTree(*tree, params, /*allowZeroNodes=*/true);
+    std::cout << featTreeToJSON(*tree, params) << std::endl;
 
 Python usage::
 
@@ -83,6 +84,9 @@ Parameter              Meaning
                        for ring-based nodes.
 ``connectorWeight``    Similarity weight for connector and branch nodes.
 ``featureGroupWeight`` Similarity weight for feature nodes.
+``similarityAutoThreshold`` Node-count threshold used when
+                       ``FeatTreeSimilarityMethod::Auto`` selects between
+                       weighted Jaccard and the edit-distance approximation.
 =====================  ================================================
 
 Similarity
@@ -90,9 +94,25 @@ Similarity
 
 ``calcFeatTreeSimilarity`` computes a weighted Jaccard index over node
 signatures.  Each signature contains the node kind, atom count, aromatic and
-hetero counts, ring size range, and summarised flags.  The same values feed the
-``calcFeatTreeEditDistanceApprox`` helper, which returns ``(1 - similarity)
-* average_node_count`` as a fast tree-edit-distance surrogate.
+hetero counts, ring size range, and summarised flags.  The similarity score is
+``sum(min(w_i^A, w_i^B)) / sum(max(w_i^A, w_i^B))`` over the matching signature
+weights ``w_i``.  The same values feed the ``calcFeatTreeEditDistanceApprox``
+helper, which returns ``(1 - similarity) * average_node_count`` as a fast
+tree-edit-distance surrogate.  The ``FeatTreeSimilarityMethod`` enum controls
+which algorithm is applied; the ``Auto`` mode uses the edit-distance surrogate
+for small graphs and falls back to weighted Jaccard otherwise.  Both algorithms
+gracefully handle empty graphs, returning a perfect score when both inputs are
+empty.
+
+Validation and hashing
+----------------------
+
+``validateFeatTree`` enforces internal invariants: node atom indices remain
+sorted, non-zero nodes are non-empty, structural nodes form a disjoint partition
+of atom indices, edges avoid duplicates, ring-end counts are within ``[0, 2]``
+and canonical ordering is honoured.  ``validateParams`` guards the construction
+parameters.  ``hashFeatTree`` produces a 64-bit canonical fingerprint that can
+be used for caching or as a determinism check.
 
 Performance Notes
 -----------------
@@ -102,9 +122,45 @@ Performance Notes
 * Atom vectors are stored as sorted ``std::vector<unsigned int>`` instances.
   ``finalizeAtomVector`` enforces determinism.
 * Path compression and canonicalisation operate in ``O(V log V + E)`` time.
-* JSON serialisation is intended for diagnostics and regression tests, not for
-  high-volume interchange.
+* JSON serialisation emits ``schema_version`` along with the influential
+  parameter settings and is intended for diagnostics and regression tests, not
+  for high-volume interchange.
 
-The unit tests ``graphmolFeatTreeConstruction`` and
-``graphmolFeatTreeSimilarity`` cover the invariants, determinism checks, feature
-annotation toggles, and similarity bounds.
+The unit tests ``graphmolFeatTreeConstruction``,
+``graphmolFeatTreeSimilarity``, ``graphmolFeatTreeInvariants``,
+``graphmolFeatTreeHash`` and ``graphmolFeatTreeSimilarityMethods`` cover the
+invariants, determinism checks, hashing, feature annotation toggles and
+similarity bounds.
+
+Python module additions
+-----------------------
+
+``rdkit.Chem.rdFeatTrees`` also exposes ``HashFeatTree`` along with the
+``FeatTreeSimilarityMethod`` enum and the ``FEATTREE_SCHEMA_VERSION`` constant.
+Calling ``FeatTree.ToJSON(params)`` returns the serialised structure with the
+current schema version and the influential parameter settings.
+
+Thread safety and profiling
+---------------------------
+
+Feature trees are immutable snapshots once constructed.  As long as client code
+avoids mutating the underlying boost graph instances they may be shared safely
+across threads.  Defining ``FEATTREE_PROFILE`` during compilation enables light
+profiling hooks (reported via ``rdDebug``) around construction, transformation,
+canonicalisation and similarity evaluation.
+
+Multi-fragment molecules
+------------------------
+
+The builders process all fragments present in the input ``ROMol``.  Workflows
+that only care about the largest component should pre-select the desired
+fragment before invoking the feature-tree API.
+
+Build toggle and API stability
+------------------------------
+
+The CMake option ``RDK_BUILD_FEATTREES`` (enabled by default in this fork)
+controls whether the feature-tree sources, tests and Python bindings are
+compiled.  The API is currently considered *experimental* and may evolve as the
+similarity methods are extended; new helpers will maintain the existing
+invariants and canonicalisation behaviour.
