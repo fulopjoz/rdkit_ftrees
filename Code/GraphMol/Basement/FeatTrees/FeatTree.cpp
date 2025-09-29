@@ -14,8 +14,8 @@
 #include <GraphMol/Atom.h>
 #include <GraphMol/Bond.h>
 #include <GraphMol/RingInfo.h>
-#include <GraphMol/ChemicalFeatures/MolChemicalFeatureFactory.h>
-#include <GraphMol/ChemicalFeatures/ChemicalFeature.h>
+#include <GraphMol/MolChemicalFeatures/MolChemicalFeatureFactory.h>
+#include <GraphMol/MolChemicalFeatures/MolChemicalFeature.h>
 #include <RDGeneral/RDLog.h>
 #include <RDConfig/Dirs.h>
 
