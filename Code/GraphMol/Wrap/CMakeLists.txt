@@ -28,7 +28,7 @@ if(RDK_BUILD_FEATTREES)
 rdkit_python_extension(rdftrees
                        ../FeatTrees/Wrap/rdFeatTrees.cpp
                        DEST Chem
-                       LINK_LIBRARIES GraphMol SmilesParse RDGeneral RDBoost)
+                       LINK_LIBRARIES FeatTrees SmilesParse RDGeneral RDBoost)
 endif()
 
 if(RDK_BUILD_MAEPARSER_SUPPORT)
