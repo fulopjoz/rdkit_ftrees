@@ -17,7 +17,6 @@
 #include <GraphMol/MolChemicalFeatures/MolChemicalFeatureFactory.h>
 #include <GraphMol/MolChemicalFeatures/MolChemicalFeature.h>
 #include <RDGeneral/RDLog.h>
-#include <RDConfig/Dirs.h>
 
 #include <algorithm>
 #include <cmath>
